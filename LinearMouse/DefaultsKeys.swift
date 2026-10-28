@@ -96,4 +96,7 @@ extension Defaults.Keys {
     static let bypassEventsFromOtherApplications = Key("bypassEventsFromOtherApplications", default: false)
 
     static let verbosedLoggingOn = Key("verbosedLoggingOn", default: false)
+
+    static let glideEnabled = Key("glideEnabled", default: true)
+    static let glideDefaultsSeeded = Key("glideDefaultsSeeded", default: false)
 }

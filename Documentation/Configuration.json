@@ -1587,6 +1587,11 @@
           "description": "The distance after rolling the wheel.",
           "title": "Scroll distance"
         },
+        "glide": {
+          "$ref": "#/definitions/Scheme.Scrolling.Glide",
+          "description": "Mouse Glide style smoothing, applied after every other scrolling setting.",
+          "title": "Glide"
+        },
         "modifiers": {
           "anyOf": [
             {
@@ -1705,6 +1710,28 @@
       "description": "The scrolling distance in pixels.",
       "pattern": "^(?:0|[1-9]\\d*)(?:\\.\\d+)?px$",
       "type": "string"
+    },
+    "Scheme.Scrolling.Glide": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Set to `false` to let this scheme's events pass through without gliding.",
+          "type": "boolean"
+        },
+        "reverse": {
+          "default": false,
+          "description": "Reverse the glide direction, on top of `reverse`.",
+          "type": "boolean"
+        },
+        "speed": {
+          "default": 2,
+          "description": "Multiplier on the glide distance of each wheel notch.",
+          "maximum": 5,
+          "minimum": 1,
+          "type": "number"
+        }
+      },
+      "type": "object"
     },
     "Scheme.Scrolling.Modifiers": {
       "additionalProperties": false,

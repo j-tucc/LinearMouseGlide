@@ -76,6 +76,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         setup()
 
+        #if DEBUG
+            // `--page customize` opens a settings page directly, for UI checks.
+            if let index = CommandLine.arguments.firstIndex(of: "--page"),
+               CommandLine.arguments.indices.contains(index + 1),
+               let page = SettingsState.Navigation(rawValue: CommandLine.arguments[index + 1]) {
+                SettingsState.shared.navigation = page
+            }
+        #endif
+
         if CommandLine.arguments.contains("--show") {
             SettingsWindowController.shared.bringToFront()
         }
@@ -129,6 +138,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate {
     func setup() {
         setupConfiguration()
+        GlideState.shared.seedDefaultsIfNeeded()
         setupNotifications()
         KeyboardSettingsSnapshot.shared.refresh()
         ModifierActionsTransformer.zoomShortcutResolver.refresh()

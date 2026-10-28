@@ -36,10 +36,14 @@ class SettingsState: ObservableObject {
     }
 
     enum Navigation: String, CaseIterable, Hashable {
-        case pointer, scrolling, buttons, general
+        case glide, customize, pointer, scrolling, buttons, general
 
         var title: LocalizedStringKey {
             switch self {
+            case .glide:
+                return "Glide"
+            case .customize:
+                return "Customize"
             case .pointer:
                 return "Pointer"
             case .scrolling:
@@ -53,6 +57,10 @@ class SettingsState: ObservableObject {
 
         var imageName: String {
             switch self {
+            case .glide:
+                return "Glide"
+            case .customize:
+                return "Customize"
             case .pointer:
                 return "Pointer"
             case .scrolling:
@@ -61,6 +69,28 @@ class SettingsState: ObservableObject {
                 return "Buttons"
             case .general:
                 return "General"
+            }
+        }
+
+        /// Fallback SF Symbol for items without an image in the asset catalog.
+        var systemSymbolName: String? {
+            switch self {
+            case .glide:
+                return "computermouse"
+            case .customize:
+                return "square.dashed"
+            default:
+                return nil
+            }
+        }
+
+        /// Glide panes edit fixed schemes, so they hide the device/app/display pickers.
+        var showsSchemeIndicators: Bool {
+            switch self {
+            case .glide, .customize, .general:
+                return false
+            case .pointer, .scrolling, .buttons:
+                return true
             }
         }
     }
@@ -88,7 +118,7 @@ class SettingsState: ObservableObject {
         }
     }
 
-    @Published var navigation: Navigation? = .pointer {
+    @Published var navigation: Navigation? = .glide {
         didSet {
             if navigation != .buttons {
                 buttonsNavigationPath.removeAll()

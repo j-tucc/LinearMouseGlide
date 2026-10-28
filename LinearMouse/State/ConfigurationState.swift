@@ -27,6 +27,8 @@ class ConfigurationState: ObservableObject {
             }
         #endif
 
+        // LinearMouse Glide keeps its own file so it never rewrites an
+        // installed LinearMouse's configuration.
         var urls: [URL] = []
 
         if let applicationSupportURL = FileManager.default
@@ -34,7 +36,7 @@ class ConfigurationState: ObservableObject {
             .first {
             urls.append(
                 URL(
-                    fileURLWithPath: "linearmouse/linearmouse.json",
+                    fileURLWithPath: "linearmouseglide/linearmouse.json",
                     relativeTo: applicationSupportURL
                 )
             )
@@ -42,7 +44,7 @@ class ConfigurationState: ObservableObject {
 
         urls.append(
             URL(
-                fileURLWithPath: ".config/linearmouse/linearmouse.json",
+                fileURLWithPath: ".config/linearmouseglide/linearmouse.json",
                 relativeTo: FileManager.default.homeDirectoryForCurrentUser
             )
         )

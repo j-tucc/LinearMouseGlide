@@ -16,8 +16,9 @@ class AutoUpdateManager: NSObject {
 
     override init() {
         super.init()
+        // LinearMouse Glide is a fork: never let upstream's appcast replace it.
         _controller = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: false,
             updaterDelegate: self,
             userDriverDelegate: nil
         )

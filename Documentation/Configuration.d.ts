@@ -214,9 +214,36 @@ declare namespace Scheme {
      * @title Modifier keys settings
      */
     modifiers?: Scrolling.Bidirectional<Scrolling.Modifiers>;
+
+    /**
+     * @title Glide
+     * @description Mouse Glide style smoothing, applied after every other scrolling setting.
+     */
+    glide?: Scrolling.Glide;
   };
 
   namespace Scrolling {
+    type Glide = {
+      /**
+       * @description Set to `false` to let this scheme's events pass through without gliding.
+       */
+      enabled?: boolean;
+
+      /**
+       * @description Multiplier on the glide distance of each wheel notch.
+       * @minimum 1
+       * @maximum 5
+       * @default 2
+       */
+      speed?: number;
+
+      /**
+       * @description Reverse the glide direction, on top of `reverse`.
+       * @default false
+       */
+      reverse?: boolean;
+    };
+
     type Bidirectional<T> =
       | T
       | undefined

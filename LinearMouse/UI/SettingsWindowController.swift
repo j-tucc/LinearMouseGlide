@@ -232,10 +232,20 @@ class SettingsSidebarViewController: NSViewController, NSTableViewDataSource, NS
             ])
         }
 
-        cell.imageView?.image = NSImage(named: item.imageName)
+        cell.imageView?.image = sidebarImage(for: item)
         cell.textField?.stringValue = NSLocalizedString(item.rawValue.capitalized, comment: "")
 
         return cell
+    }
+
+    private func sidebarImage(for item: SettingsState.Navigation) -> NSImage? {
+        if let image = NSImage(named: item.imageName) {
+            return image
+        }
+        if #available(macOS 11.0, *), let symbolName = item.systemSymbolName {
+            return NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+        }
+        return nil
     }
 
     func tableViewSelectionDidChange(_: Notification) {
@@ -270,6 +280,10 @@ class SettingsDetailViewController: NSViewController {
         // Create new content
         let content: AnyView
         switch navigation {
+        case .glide:
+            content = AnyView(GlideSettings())
+        case .customize:
+            content = AnyView(GlideCustomizeSettings())
         case .pointer:
             content = AnyView(PointerSettings())
         case .scrolling:
@@ -337,6 +351,7 @@ class SettingsToolbar: NSToolbar, NSToolbarDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.validateVisibleItems()
+                self?.updateSchemeIndicatorVisibility()
             }
             .store(in: &cancellables)
 
@@ -353,7 +368,7 @@ class SettingsToolbar: NSToolbar, NSToolbarDelegate {
         guard let navigation = splitViewController?.currentNavigation else {
             return false
         }
-        return navigation != .general
+        return navigation.showsSchemeIndicators
     }
 
     // MARK: - NSToolbarDelegate
@@ -415,7 +430,25 @@ class SettingsToolbar: NSToolbar, NSToolbarDelegate {
     private func createIndicatorItem(identifier: NSToolbarItem.Identifier, indicator: NSButton) -> NSToolbarItem {
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.view = indicator
+        setSchemeIndicator(item, hidden: !shouldShowSchemeIndicators)
         return item
+    }
+
+    /// View-based toolbar items are not always revalidated, so hide the
+    /// indicators directly when the page changes.
+    private func updateSchemeIndicatorVisibility() {
+        let indicatorIdentifiers = [Self.deviceItemIdentifier, Self.appItemIdentifier, Self.displayItemIdentifier]
+        for item in items where indicatorIdentifiers.contains(item.itemIdentifier) {
+            setSchemeIndicator(item, hidden: !shouldShowSchemeIndicators)
+        }
+    }
+
+    /// Hiding only the view leaves an empty glass capsule on macOS 26.
+    private func setSchemeIndicator(_ item: NSToolbarItem, hidden: Bool) {
+        item.view?.isHidden = hidden
+        if #available(macOS 15.0, *) {
+            item.isHidden = hidden
+        }
     }
 
     private func updateButtonsNavigation(_ destination: SettingsState.ButtonsDestination?) {
@@ -445,7 +478,7 @@ class SettingsToolbar: NSToolbar, NSToolbarDelegate {
         case Self.buttonsBackItemIdentifier:
             return buttonsDestination != nil
         case Self.deviceItemIdentifier, Self.appItemIdentifier, Self.displayItemIdentifier:
-            item.view?.isHidden = !shouldShowSchemeIndicators
+            setSchemeIndicator(item, hidden: !shouldShowSchemeIndicators)
             return shouldShowSchemeIndicators
         default:
             return true

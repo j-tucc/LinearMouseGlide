@@ -1,7 +1,8 @@
 CURRENT_PROJECT_VERSION = dev
 MARKETING_VERSION = $(CURRENT_PROJECT_VERSION)
 
-PRODUCT_BUNDLE_IDENTIFIER = com.lujjjh.dev.LinearMouse
+PRODUCT_BUNDLE_IDENTIFIER = app.linearmouseglide.dev.LinearMouseGlide
+LM_APP_NAME = LinearMouse Glide
 ASSETCATALOG_COMPILER_APPICON_NAME = AppIconDev
 
 // Xcode 27 raises Swift package deployment targets to macOS 12.

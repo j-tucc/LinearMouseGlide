@@ -86,11 +86,6 @@ struct GeneralSettings: View {
 
                 ConfigurationSection()
 
-                Section {
-                    CheckForUpdatesView()
-                }
-                .modifier(SectionViewModifier())
-
                 LoggingSection()
 
                 Section {

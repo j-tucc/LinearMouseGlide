@@ -989,6 +989,12 @@ class EventTransformerManager {
                 ))
         }
 
+        // Glide sees the wheel only after every other scrolling setting, the
+        // way Mouse Glide's session tap saw LinearMouse's HID tap output.
+        if let glide = scheme.scrolling.$glide, glide.isEnabled {
+            eventTransformer.append(GlideScrollingTransformer(glide: glide))
+        }
+
         if let timeout = scheme.buttons.clickDebouncing.timeout, timeout > 0 {
             let mode = scheme.buttons.clickDebouncing.mode ?? .legacy
             let resetTimerOnMouseUp = scheme.buttons.clickDebouncing.resetTimerOnMouseUp ?? false
