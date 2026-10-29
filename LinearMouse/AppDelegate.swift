@@ -222,6 +222,7 @@ extension AppDelegate {
         case .suspended:
             BatteryDeviceMonitor.shared.disable()
             GlobalEventTap.shared.stop()
+            GlideEventTap.shared.stop()
             DeviceManager.shared.suspendForSleep()
         case .stopped:
             stop()
@@ -243,6 +244,7 @@ extension AppDelegate {
         DeviceManager.shared.start()
         BatteryDeviceMonitor.shared.enable()
         GlobalEventTap.shared.start()
+        GlideEventTap.shared.start()
     }
 
     func stop(
@@ -251,6 +253,7 @@ extension AppDelegate {
     ) {
         BatteryDeviceMonitor.shared.disable()
         GlobalEventTap.shared.stop()
+        GlideEventTap.shared.stop()
         DeviceManager.shared.stop(
             logitechTeardownPolicy: logitechTeardownPolicy,
             completion: completion

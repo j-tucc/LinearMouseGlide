@@ -12,9 +12,10 @@ import os.log
 /// and every display frame emits 13.36% of the remaining distance as a
 /// continuous scroll event, until a frame would move 1 point or less.
 ///
-/// Unlike the original, frames are posted with `CGEvent.post` instead of
-/// re-using the tap proxy off the tap thread (which crashed Mouse Glide), and
-/// every frame posts a fresh copy rather than re-posting one shared event.
+/// Unlike the original, frames are posted with `CGEvent.post` at the same tap
+/// location instead of re-using the tap proxy off the tap thread (which
+/// crashed Mouse Glide), and every frame posts a fresh copy rather than
+/// re-posting one shared event.
 final class GlideScrollingEngine {
     static let shared = GlideScrollingEngine()
 
@@ -36,7 +37,10 @@ final class GlideScrollingEngine {
     private var lastDelta = 0.0
     private var enabled = Defaults[.glideEnabled]
 
-    var post: (CGEvent) -> Void = { $0.post(tap: .cgSessionEventTap) }
+    /// Frames are copies of events already addressed by the window server,
+    /// re-entering where they were captured, so they keep their target and
+    /// never move the cursor.
+    var post: (CGEvent) -> Void = { $0.post(tap: .cgAnnotatedSessionEventTap) }
 
     init() {
         Defaults.observe(.glideEnabled, options: []) { [weak self] change in
@@ -85,7 +89,9 @@ final class GlideScrollingEngine {
 
         withLock {
             template = copy
-            // A shifted vertical wheel scrolls horizontally, as in the original.
+            // Shift turns a vertical wheel sideways, as in the original. Unlike
+            // the original, horizontal wheels (tilt or side wheels) also glide
+            // sideways instead of being redirected vertically.
             horizontal = isHorizontalInput || event.flags.contains(.maskShift)
             if clamped * lastDelta <= 0 {
                 target = speed * clamped
@@ -153,11 +159,6 @@ final class GlideScrollingEngine {
         }
 
         if let event = template?.copy() {
-            // The template still holds the cursor position of the wheel event;
-            // posting that would snap the cursor back every frame.
-            if let location = CGEvent(source: nil)?.location {
-                event.location = location
-            }
             event.setDoubleValueField(.scrollWheelEventPointDeltaAxis1, value: horizontal ? 0 : step)
             event.setDoubleValueField(.scrollWheelEventPointDeltaAxis2, value: horizontal ? step : 0)
             event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: 0)
@@ -179,29 +180,5 @@ final class GlideScrollingEngine {
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
         return body()
-    }
-}
-
-final class GlideScrollingTransformer: EventTransformer {
-    private let glide: Scheme.Scrolling.Glide
-    private let engine: GlideScrollingEngine
-
-    init(glide: Scheme.Scrolling.Glide, engine: GlideScrollingEngine = .shared) {
-        self.glide = glide
-        self.engine = engine
-    }
-
-    var handlesPointerMotion: Bool {
-        false
-    }
-
-    func transform(_ event: CGEvent, in _: EventTransformerContext) -> CGEvent? {
-        guard event.type == .scrollWheel,
-              !event.isLinearMouseSyntheticEvent,
-              engine.isEnabled else {
-            return event
-        }
-
-        return engine.feed(event, speed: glide.resolvedSpeed, reverse: glide.isReversed) ? nil : event
     }
 }
