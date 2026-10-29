@@ -69,8 +69,12 @@ final class GlideCrashGuard {
         }
     }
 
-    /// Call when the app quits normally.
+    /// Call when the app quits normally. Leaves a lock that belongs to
+    /// another copy of the app (a Debug build next to the installed one).
     func end() {
+        guard readSession()?.pid == ProcessInfo.processInfo.processIdentifier else {
+            return
+        }
         try? FileManager.default.removeItem(at: lockURL)
     }
 

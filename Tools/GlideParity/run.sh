@@ -17,9 +17,13 @@ if [[ ! -x $HARNESS || Tools/GlideParity/GlideParity.swift -nt $HARNESS ]]; then
 fi
 
 quit_all() {
-    osascript -e 'tell application id "com.tinfine.MouseGlide" to quit' \
-        -e 'tell application id "com.lujjjh.LinearMouse" to quit' \
-        -e 'tell application id "app.linearmouseglide.dev.LinearMouseGlide" to quit' 2>/dev/null || true
+    # One osascript per app: telling an app that isn't installed fails the
+    # whole script.
+    for id in com.tinfine.MouseGlide com.lujjjh.LinearMouse \
+        app.linearmouseglide.dev.LinearMouseGlide app.linearmouseglide.LinearMouseGlide; do
+        osascript -e "application id \"$id\" is running" 2>/dev/null | grep -q true &&
+            osascript -e "tell application id \"$id\" to quit" >/dev/null 2>&1 || true
+    done
     sleep 2
 }
 

@@ -69,6 +69,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         #endif
 
+        guard !yieldsToInstalledGlide() else {
+            return
+        }
+
         GlideCrashGuard.shared.begin()
         GlideFaults.shared.listen()
         _ = GlideHealth.shared
@@ -92,6 +96,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--show") {
             SettingsWindowController.shared.bringToFront()
         }
+    }
+
+    /// The installed app and a Debug build have different bundle identifiers,
+    /// so macOS would run both (say, both set to launch at login) and every
+    /// scroll would glide twice. The installed app wins: it quits a running
+    /// Debug build, and a Debug build quits when the installed app is running.
+    private func yieldsToInstalledGlide() -> Bool {
+        let installedID = "app.linearmouseglide.LinearMouseGlide"
+        let debugID = "app.linearmouseglide.dev.LinearMouseGlide"
+
+        if Bundle.main.bundleIdentifier == debugID {
+            guard NSRunningApplication.runningApplications(withBundleIdentifier: installedID).isEmpty else {
+                os_log("The installed LinearMouse Glide is running; quitting", log: Self.log, type: .info)
+                NSApp.terminate(nil)
+                return true
+            }
+        } else {
+            for app in NSRunningApplication.runningApplications(withBundleIdentifier: debugID) {
+                os_log("Quitting the Debug build of LinearMouse Glide (pid %d)", log: Self.log, type: .info, app.processIdentifier)
+                app.terminate()
+            }
+        }
+        return false
     }
 
     func applicationWillTerminate(_: Notification) {
