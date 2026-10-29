@@ -18,6 +18,9 @@ struct GlideSettings: View {
         DetailView(schemeSpecific: false) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    GlideStatusBanner()
+                        .padding(.bottom, 12)
+
                     GlideSectionTitle("Launch & Show")
                     GlideCard {
                         GlideRow("Enable Glide", subtitle: "Turn on the functions of the app") {

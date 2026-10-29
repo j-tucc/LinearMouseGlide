@@ -6,6 +6,7 @@
 //   glide-parity record <out.json>        play scripted input, record what an app receives
 //   glide-parity compare <a.json> <b.json> diff two recordings scenario by scenario
 //   glide-parity sample [seconds]          summarize physical horizontal wheel input, left vs right
+//   glide-parity faults                    inject failures into a Debug LinearMouse Glide and check it fails open
 //
 // `record` opens a window under the cursor, waits for one physical mouse
 // movement (so LinearMouse attributes the synthetic events to that mouse as
@@ -118,7 +119,12 @@ let scenarios: [Scenario] = [
 // MARK: - Recorder
 
 final class Recorder: NSObject, NSApplicationDelegate {
-    private let outputURL: URL
+    enum Mode {
+        case record(URL)
+        case faults
+    }
+
+    private let mode: Mode
     private var window: NSWindow!
     private var label: NSTextField!
     private let source = CGEventSource(stateID: .hidSystemState)
@@ -130,8 +136,8 @@ final class Recorder: NSObject, NSApplicationDelegate {
     private var physicalInputSeen = false
     private var recording = false
 
-    init(outputURL: URL) {
-        self.outputURL = outputURL
+    init(mode: Mode) {
+        self.mode = mode
     }
 
     func applicationDidFinishLaunching(_: Notification) {
@@ -173,11 +179,19 @@ final class Recorder: NSObject, NSApplicationDelegate {
         }
 
         Thread.detachNewThread { [weak self] in
-            self?.run()
+            guard let self else {
+                return
+            }
+            switch mode {
+            case let .record(outputURL):
+                run(outputURL: outputURL)
+            case .faults:
+                exit(FaultSuite(recorder: self).run() ? 0 : 1)
+            }
         }
     }
 
-    private func say(_ text: String) {
+    func say(_ text: String) {
         DispatchQueue.main.async {
             self.label.stringValue = text
         }
@@ -230,7 +244,7 @@ final class Recorder: NSObject, NSApplicationDelegate {
         CGEvent(source: nil)?.location ?? .zero
     }
 
-    private func post(_ step: Step) {
+    func post(_ step: Step) {
         switch step {
         case let .wheel(y, x, flags):
             guard let event = CGEvent(
@@ -267,7 +281,7 @@ final class Recorder: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func waitForQuiet(quietMs: Double = 600, maxMs: Double = 4000) {
+    func waitForQuiet(quietMs: Double = 600, maxMs: Double = 4000) {
         let deadline = Date().addingTimeInterval(maxMs / 1000)
         while Date() < deadline {
             usleep(20000)
@@ -280,7 +294,7 @@ final class Recorder: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func centerCursor() {
+    func centerCursor() {
         let frame = DispatchQueue.main.sync { window.frame }
         let screenHeight = NSScreen.screens[0].frame.height
         let center = CGPoint(x: frame.midX, y: screenHeight - frame.midY)
@@ -289,17 +303,57 @@ final class Recorder: NSObject, NSApplicationDelegate {
         usleep(100_000)
     }
 
-    private func run() {
-        say("Move your mouse once, then let go.")
-        // GLIDE_PARITY_NOWAIT=1 trusts the stack's current last active device.
-        while ProcessInfo.processInfo.environment["GLIDE_PARITY_NOWAIT"] == nil {
+    /// Waits for one physical mouse movement; false if `timeout` passes first.
+    @discardableResult
+    func waitForPhysicalMove(_ prompt: String = "Move your mouse once, then let go.", timeout: Double = .infinity) -> Bool {
+        lock.lock()
+        physicalInputSeen = false
+        lock.unlock()
+        say(prompt)
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
             usleep(50000)
             lock.lock()
             let seen = physicalInputSeen
             lock.unlock()
             if seen {
-                break
+                return true
             }
+        }
+        return false
+    }
+
+    /// Plays `steps` with this window frontmost and returns what it received.
+    func probe(_ steps: [Step], maxMs: Double = 4000) -> (events: [RecordedEvent], contaminated: Bool) {
+        centerCursor()
+        DispatchQueue.main.sync {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        usleep(200_000)
+        lock.lock()
+        current = []
+        physicalInputSeen = false
+        lastEventAt = Date()
+        scenarioStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        recording = true
+        lock.unlock()
+
+        for step in steps {
+            post(step)
+        }
+        waitForQuiet(maxMs: maxMs)
+
+        lock.lock()
+        recording = false
+        let result = (current, physicalInputSeen)
+        lock.unlock()
+        return result
+    }
+
+    private func run(outputURL: URL) {
+        // GLIDE_PARITY_NOWAIT=1 trusts the stack's current last active device.
+        if ProcessInfo.processInfo.environment["GLIDE_PARITY_NOWAIT"] == nil {
+            waitForPhysicalMove()
         }
         say("Hands off — recording…")
         sleep(2)
@@ -373,6 +427,224 @@ final class Recorder: NSObject, NSApplicationDelegate {
         say("Done — wrote \(outputURL.lastPathComponent)")
         sleep(1)
         exit(0)
+    }
+}
+
+// MARK: - Faults
+
+/// Breaks a running Debug build of LinearMouse Glide in each way its failure
+/// handling covers, through its debug fault notification, and checks that
+/// every wheel notch still scrolls, that the status file reports the problem
+/// and the recovery, and that a crash brings the app back.
+final class FaultSuite {
+    static let faultNotification = Notification.Name("app.linearmouseglide.debug.fault")
+    static let healthURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/LinearMouseGlide/health.json")
+
+    private let recorder: Recorder
+    private var failures = 0
+
+    init(recorder: Recorder) {
+        self.recorder = recorder
+    }
+
+    enum Delivery: Equatable {
+        case none
+        case raw // passed through unsmoothed
+        case flushed // one frame carrying the whole glide
+        case glided
+    }
+
+    struct Delivered {
+        var delivery: Delivery
+        var frames: Int
+        var total: Double
+        var contaminated: Bool
+
+        var summary: String {
+            "\(delivery) — \(frames) event(s), \(String(format: "%.0f", total)) pt" + (contaminated ? " (physical input seen)" : "")
+        }
+    }
+
+    // MARK: Helpers
+
+    private func inject(_ fault: String) {
+        DistributedNotificationCenter.default().postNotificationName(
+            Self.faultNotification, object: fault, userInfo: nil, deliverImmediately: true
+        )
+        usleep(300_000)
+    }
+
+    private func health() -> [String: Any] {
+        guard let data = try? Data(contentsOf: Self.healthURL),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [:]
+        }
+        return object
+    }
+
+    private func status() -> String {
+        health()["status"] as? String ?? "missing"
+    }
+
+    private func counter(_ name: String) -> Int {
+        (health()["counters"] as? [String: Int])?[name] ?? 0
+    }
+
+    private func waitUntil(_ timeout: Double, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if condition() {
+                return true
+            }
+            usleep(100_000)
+        } while Date() < deadline
+        return condition()
+    }
+
+    /// One wheel notch: was it delivered, and how? (Its direction depends on
+    /// the device's reverse settings, so any non-zero distance counts.)
+    private func notch(maxMs: Double = 4000) -> Delivered {
+        let (events, contaminated) = recorder.probe([notchDown], maxMs: maxMs)
+        let total = events.reduce(0) { $0 + $1.pointY }
+        let delivery: Delivery
+        if events.isEmpty || total == 0 {
+            delivery = .none
+        } else if events.contains(where: { $0.continuous == 0 }) {
+            delivery = .raw
+        } else if events.count == 1 {
+            delivery = .flushed
+        } else {
+            delivery = .glided
+        }
+        return Delivered(delivery: delivery, frames: events.count, total: total, contaminated: contaminated)
+    }
+
+    private func check(_ name: String, _ passed: Bool, _ detail: String) {
+        if !passed {
+            failures += 1
+        }
+        recorder.say("\(passed ? "PASS" : "FAIL")  \(name): \(detail)")
+    }
+
+    private func expect(_ name: String, _ delivered: Delivered, _ allowed: Set<Delivery>) {
+        check(name, allowed.contains(delivered.delivery), delivered.summary)
+    }
+
+    // MARK: Tests
+
+    func run() -> Bool {
+        // GLIDE_PARITY_NOWAIT=1 trusts the app's current last active device.
+        if ProcessInfo.processInfo.environment["GLIDE_PARITY_NOWAIT"] == nil {
+            recorder.waitForPhysicalMove()
+        }
+        recorder.say("Hands off — fault tests…")
+        sleep(2)
+        inject("clear")
+
+        guard let pid = health()["pid"] as? Int else {
+            recorder.say("FAIL  LinearMouse Glide isn't running a Debug build with a status file")
+            return false
+        }
+        check("starts healthy", status() == "active", "status \(status()), pid \(pid)")
+        expect("baseline notch glides", notch(), [.glided])
+
+        // GLIDE_FAULTS_ONLY=tap,crash runs just those tests.
+        let only = ProcessInfo.processInfo.environment["GLIDE_FAULTS_ONLY"].map { Set($0.split(separator: ",").map(String.init)) }
+        let tests: [(String, () -> Void)] = [
+            ("stall", stallFrames),
+            ("link", failLink),
+            ("tap", invalidateTap),
+            ("crash", { self.crash(pid: pid) })
+        ]
+        for (name, test) in tests where only?.contains(name) ?? true {
+            test()
+        }
+
+        inject("clear")
+        recorder.say(failures == 0 ? "All fault tests passed." : "\(failures) check(s) failed.")
+        sleep(1)
+        return failures == 0
+    }
+
+    /// Display frames stop arriving: the watchdog flushes each glide, then
+    /// after two stalls Glide passes notches through until frames return.
+    private func stallFrames() {
+        let flushedBefore = counter("frameStallsFlushed")
+        let pausesBefore = counter("pauseNotices")
+        let restoredBefore = counter("restoredNotices")
+        inject("stall-frames")
+
+        expect("stalled frames: 1st notch flushed by watchdog", notch(), [.flushed])
+        check("stalled frames: flush counted", counter("frameStallsFlushed") == flushedBefore + 1, "frameStallsFlushed \(counter("frameStallsFlushed"))")
+        expect("stalled frames: 2nd notch flushed by watchdog", notch(), [.flushed])
+        check("stalled frames: status degraded after 2 stalls", waitUntil(1) { status() == "degraded" }, "status \(status()), reason \(health()["reason"] ?? "-")")
+        let bypassedAt = Date()
+        expect("stalled frames: notch passes through", notch(), [.raw])
+        check("stalled frames: pause notification sent", waitUntil(4) { counter("pauseNotices") == pausesBefore + 1 }, "pauseNotices \(counter("pauseNotices"))")
+
+        inject("clear")
+        Thread.sleep(until: bypassedAt.addingTimeInterval(5.5))
+        expect("stalled frames: glides again once frames return", notch(), [.glided])
+        check("stalled frames: status active again", waitUntil(1) { status() == "active" }, "status \(status()), lastIncident \(health()["lastIncident"] ?? "-")")
+        check("stalled frames: restored notification sent", waitUntil(1) { counter("restoredNotices") == restoredBefore + 1 }, "restoredNotices \(counter("restoredNotices"))")
+    }
+
+    /// The frame source can't start: notches pass through at once.
+    private func failLink() {
+        inject("fail-link")
+        let bypassedAt = Date()
+        expect("no frame source: notch passes through", notch(), [.raw])
+        check("no frame source: status degraded", waitUntil(1) { status() == "degraded" }, "status \(status()), reason \(health()["reason"] ?? "-")")
+        expect("no frame source: next notch passes through", notch(), [.raw])
+
+        inject("clear")
+        Thread.sleep(until: bypassedAt.addingTimeInterval(5.5))
+        expect("no frame source: glides again once it starts", notch(), [.glided])
+        check("no frame source: status active again", waitUntil(1) { status() == "active" }, "status \(status())")
+    }
+
+    /// macOS invalidates Glide's tap: notches pass unsmoothed until the
+    /// health check rebuilds it.
+    private func invalidateTap() {
+        let rebuildsBefore = counter("tapRebuilds")
+        inject("invalidate-tap")
+        expect("tap removed: notch still delivered", notch(maxMs: 1500), [.raw, .glided])
+        check("tap removed: rebuilt by health check", waitUntil(3) { counter("tapRebuilds") == rebuildsBefore + 1 }, "tapRebuilds \(counter("tapRebuilds"))")
+        check("tap removed: status active", waitUntil(1) { status() == "active" }, "status \(status()), lastIncident \(health()["lastIncident"] ?? "-")")
+        expect("tap removed: glides after rebuild", notch(), [.glided])
+    }
+
+    /// The app crashes: scrolling keeps working and it comes back.
+    private func crash(pid: Int) {
+        // Forget earlier test crashes, so repeated runs don't trip the
+        // crash-loop guard (3 crashes in 10 minutes stops auto-restart).
+        try? FileManager.default.removeItem(at: Self.healthURL.deletingLastPathComponent().appendingPathComponent("crashes.json"))
+        inject("crash")
+        // A crashing process lingers while macOS writes its crash report.
+        check("crash: app process gone", waitUntil(15) { kill(pid_t(pid), 0) != 0 }, "pid \(pid)")
+        sleep(1)
+        expect("crash: notch still delivered while it's down", notch(maxMs: 3000), [.raw])
+
+        recorder.say("Waiting for LinearMouse Glide to restart…")
+        let restarted = waitUntil(45) {
+            let newPid = health()["pid"] as? Int
+            return newPid != nil && newPid != pid && health()["restartedAfterCrash"] as? Bool == true
+        }
+        check("crash: restarted with crash notice", restarted, "pid \(health()["pid"] ?? "-"), restartedAfterCrash \(health()["restartedAfterCrash"] ?? "-")")
+        guard restarted else {
+            return
+        }
+        sleep(2)
+
+        // The new instance needs one physical event to know which mouse is active.
+        if recorder.waitForPhysicalMove("Restarted. Move your mouse once more, then let go.", timeout: 60) {
+            recorder.say("Hands off…")
+            sleep(2)
+            expect("crash: glides after restart", notch(), [.glided])
+        } else {
+            check("crash: glides after restart", false, "no mouse movement within 60 s, not checked")
+        }
     }
 }
 
@@ -611,7 +883,13 @@ switch arguments.dropFirst().first {
 case "record" where arguments.count == 3:
     let app = NSApplication.shared
     app.setActivationPolicy(.regular)
-    let recorder = Recorder(outputURL: URL(fileURLWithPath: arguments[2]))
+    let recorder = Recorder(mode: .record(URL(fileURLWithPath: arguments[2])))
+    app.delegate = recorder
+    app.run()
+case "faults":
+    let app = NSApplication.shared
+    app.setActivationPolicy(.regular)
+    let recorder = Recorder(mode: .faults)
     app.delegate = recorder
     app.run()
 case "sample":
@@ -622,6 +900,6 @@ case "compare" where arguments.count == 4:
     let b = try! decoder.decode(Recording.self, from: Data(contentsOf: URL(fileURLWithPath: arguments[3])))
     exit(compare(a, b) ? 0 : 1)
 default:
-    print("usage: glide-parity record <out.json> | compare <a.json> <b.json> | sample [seconds]")
+    print("usage: glide-parity record <out.json> | compare <a.json> <b.json> | sample [seconds] | faults")
     exit(2)
 }

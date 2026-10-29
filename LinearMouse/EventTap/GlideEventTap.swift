@@ -28,9 +28,30 @@ final class GlideEventTap {
     private var routes: [RouteKey: Scheme.Scrolling.Glide] = [:]
     private var subscriptions = Set<AnyCancellable>()
 
+    // Main thread only, except `tap`, which the tap thread also sets and
+    // reads (to re-enable itself), so it goes through `lock`.
     private var thread: Thread?
     private var runLoop: CFRunLoop?
-    private var tap: CFMachPort?
+    private var _tap: CFMachPort?
+    private var tap: CFMachPort? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _tap
+        }
+        set {
+            lock.lock()
+            _tap = newValue
+            lock.unlock()
+        }
+    }
+    private var shouldRun = false
+    private var healthTimer: Timer?
+    private var retryWork: DispatchWorkItem?
+    private var retryAttempt = 0
+
+    private static let retryDelays: [TimeInterval] = [0.5, 1, 2, 5, 10]
+    private static let healthCheckInterval: TimeInterval = 2
 
     init() {
         ConfigurationState.shared.$configuration
@@ -44,11 +65,44 @@ final class GlideEventTap {
                 lock.unlock()
             }
             .store(in: &subscriptions)
+
+        GlideFaults.shared.onInvalidateTap = { [weak self] in
+            if let tap = self?.tap {
+                CFMachPortInvalidate(tap)
+            }
+        }
     }
 
     func start() {
-        guard thread == nil else {
+        guard !shouldRun else {
             return
+        }
+        shouldRun = true
+        retryAttempt = 0
+        startHealthChecks()
+        attach()
+    }
+
+    func stop() {
+        guard shouldRun else {
+            return
+        }
+        shouldRun = false
+        healthTimer?.invalidate()
+        healthTimer = nil
+        retryWork?.cancel()
+        retryWork = nil
+        detach()
+        engine.stop()
+        GlideHealth.shared.report(.tap, problem: nil)
+    }
+
+    // MARK: - Lifecycle
+
+    @discardableResult
+    private func attach() -> Bool {
+        guard shouldRun, thread == nil else {
+            return tap != nil
         }
 
         let ready = DispatchSemaphore(value: 0)
@@ -60,13 +114,23 @@ final class GlideEventTap {
         self.thread = thread
         thread.start()
         ready.wait()
-    }
 
-    func stop() {
-        guard thread != nil else {
-            return
+        guard tap != nil else {
+            self.thread = nil
+            GlideHealth.shared.report(
+                .tap,
+                problem: NSLocalizedString("Glide couldn't attach to scroll events.", comment: "")
+            )
+            scheduleRetry()
+            return false
         }
 
+        retryAttempt = 0
+        GlideHealth.shared.report(.tap, problem: nil)
+        return true
+    }
+
+    private func detach() {
         if let tap {
             CGEvent.tapEnable(tap: tap, enable: false)
             CFMachPortInvalidate(tap)
@@ -77,7 +141,65 @@ final class GlideEventTap {
         tap = nil
         runLoop = nil
         thread = nil
-        engine.stop()
+    }
+
+    private func scheduleRetry() {
+        guard shouldRun, retryWork == nil else {
+            return
+        }
+        let delay = Self.retryDelays[min(retryAttempt, Self.retryDelays.count - 1)]
+        retryAttempt += 1
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else {
+                return
+            }
+            retryWork = nil
+            if tap == nil {
+                attach()
+            }
+        }
+        retryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func startHealthChecks() {
+        healthTimer?.invalidate()
+        let timer = Timer(timeInterval: Self.healthCheckInterval, repeats: true) { [weak self] _ in
+            self?.checkHealth()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        healthTimer = timer
+    }
+
+    /// Rebuilds the tap if macOS invalidated it, and re-enables it if disabled.
+    private func checkHealth() {
+        guard shouldRun else {
+            return
+        }
+        guard let tap else {
+            scheduleRetry()
+            return
+        }
+
+        if !CFMachPortIsValid(tap) {
+            os_log("Glide event tap was invalidated; rebuilding", log: Self.log, type: .error)
+            GlideHealth.shared.report(.tap, problem: NSLocalizedString("macOS removed Glide's scroll hook.", comment: ""))
+            GlideHealth.shared.count("tapRebuilds")
+            detach()
+            attach()
+            return
+        }
+
+        if !CGEvent.tapIsEnabled(tap: tap) {
+            CGEvent.tapEnable(tap: tap, enable: true)
+            GlideHealth.shared.count("tapReenables")
+            if !CGEvent.tapIsEnabled(tap: tap) {
+                os_log("Glide event tap stayed disabled; rebuilding", log: Self.log, type: .error)
+                GlideHealth.shared.report(.tap, problem: NSLocalizedString("Glide's scroll hook was disabled.", comment: ""))
+                detach()
+                attach()
+            }
+        }
     }
 
     private func runTap(signalling ready: DispatchSemaphore) {

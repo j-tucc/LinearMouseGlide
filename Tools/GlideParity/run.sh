@@ -5,6 +5,7 @@
 #   Tools/GlideParity/run.sh new <out.json>   LinearMouse Glide (Debug build)
 #   Tools/GlideParity/run.sh again <out.json> record the running stack again (noise baseline)
 #   Tools/GlideParity/run.sh compare <old.json> <new.json>
+#   Tools/GlideParity/run.sh faults           break the Debug build on purpose, check it fails open
 
 cd "$(dirname "$0")/../.."
 HARNESS=build/glide-parity
@@ -39,8 +40,14 @@ again)
 compare)
     exec "$HARNESS" compare "$2" "$3"
     ;;
+faults)
+    quit_all
+    open "$NEW_APP"
+    sleep 4
+    exec "$HARNESS" faults
+    ;;
 *)
-    echo "usage: $0 old|new|again <out.json> | compare <a.json> <b.json>" >&2
+    echo "usage: $0 old|new|again <out.json> | compare <a.json> <b.json> | faults" >&2
     exit 2
     ;;
 esac

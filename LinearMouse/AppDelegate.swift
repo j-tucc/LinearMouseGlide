@@ -69,6 +69,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         #endif
 
+        GlideCrashGuard.shared.begin()
+        GlideFaults.shared.listen()
+        _ = GlideHealth.shared
+
         guard AccessibilityPermission.enabled else {
             AccessibilityPermissionWindow.shared.show()
             return
@@ -88,6 +92,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--show") {
             SettingsWindowController.shared.bringToFront()
         }
+    }
+
+    func applicationWillTerminate(_: Notification) {
+        guard ProcessEnvironment.isRunningApp else {
+            return
+        }
+
+        GlideCrashGuard.shared.end()
     }
 
     func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

@@ -170,7 +170,8 @@ class StatusItem: NSObject, NSMenuDelegate {
         let shouldBeVisible = Self.menuBarIsVisible(
             currentBatteryLevel: currentBatteryLevel,
             visibilityMode: Defaults[.menuBarVisibilityMode],
-            batteryDisplayMode: menuBarBatteryDisplayMode
+            batteryDisplayMode: menuBarBatteryDisplayMode,
+            glideNeedsAttention: GlideHealth.shared.needsAttention
         )
         if statusItem.isVisible != shouldBeVisible {
             statusItem.isVisible = shouldBeVisible
@@ -179,6 +180,22 @@ class StatusItem: NSObject, NSMenuDelegate {
             currentBatteryLevel: currentBatteryLevel,
             menuBarBatteryDisplayMode: menuBarBatteryDisplayMode
         )
+        updateStatusItemGlideIndicator()
+    }
+
+    /// Dims the icon while Glide is paused, with the reason as its tooltip.
+    private func updateStatusItemGlideIndicator() {
+        guard let button = statusItem.button else {
+            return
+        }
+
+        if case let .degraded(reason) = GlideHealth.shared.status {
+            button.appearsDisabled = true
+            button.toolTip = String(format: NSLocalizedString("Glide paused: %@", comment: ""), reason)
+        } else {
+            button.appearsDisabled = false
+            button.toolTip = nil
+        }
     }
 
     private func updateStatusItemBatteryIndicator(
@@ -239,13 +256,15 @@ class StatusItem: NSObject, NSMenuDelegate {
     static func menuBarIsVisible(
         currentBatteryLevel: Int?,
         visibilityMode: MenuBarVisibilityMode,
-        batteryDisplayMode: MenuBarBatteryDisplayMode
+        batteryDisplayMode: MenuBarBatteryDisplayMode,
+        glideNeedsAttention: Bool = false
     ) -> Bool {
         switch visibilityMode {
         case .always:
             return true
         case .whenAttentionNeeded:
-            return menuBarBatteryTitle(currentBatteryLevel: currentBatteryLevel, mode: batteryDisplayMode) != nil
+            return glideNeedsAttention ||
+                menuBarBatteryTitle(currentBatteryLevel: currentBatteryLevel, mode: batteryDisplayMode) != nil
         case .never:
             return false
         }
@@ -386,6 +405,14 @@ class StatusItem: NSObject, NSMenuDelegate {
             self?.updateStatusItemPresentation()
         }
         .tieToLifetime(of: self)
+
+        GlideHealth.shared
+            .$status
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateStatusItemPresentation()
+            }
+            .store(in: &subscriptions)
     }
 
     func menuWillOpen(_: NSMenu) {
