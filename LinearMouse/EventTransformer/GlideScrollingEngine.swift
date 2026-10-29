@@ -61,7 +61,8 @@ final class GlideScrollingEngine {
     }
 
     /// Returns true when the event was consumed and will be replayed as a glide.
-    func feed(_ event: CGEvent, speed: Double, reverse: Bool) -> Bool {
+    /// `leftMultiplier` scales leftward horizontal wheel input only.
+    func feed(_ event: CGEvent, speed: Double, reverse: Bool, leftMultiplier: Double = 1) -> Bool {
         // Trackpads and Magic Mouse already scroll smoothly.
         guard event.getIntegerValueField(.scrollWheelEventScrollPhase) == 0,
               event.getIntegerValueField(.scrollWheelEventMomentumPhase) == 0,
@@ -80,6 +81,8 @@ final class GlideScrollingEngine {
         guard delta != 0, let copy = event.copy() else {
             return false
         }
+        // Side wheels report left as negative.
+        let scale = isHorizontalInput && delta < 0 ? leftMultiplier : 1
 
         if reverse {
             delta = -delta
@@ -94,10 +97,10 @@ final class GlideScrollingEngine {
             // sideways instead of being redirected vertically.
             horizontal = isHorizontalInput || event.flags.contains(.maskShift)
             if clamped * lastDelta <= 0 {
-                target = speed * clamped
+                target = speed * scale * clamped
                 position = 0
             } else {
-                target += speed * clamped
+                target += speed * scale * clamped
             }
             lastDelta = clamped
         }

@@ -58,6 +58,14 @@ extension GlideState {
         set { updateGlobal { $0.speed = Self.decimal(newValue) } }
     }
 
+    var leftMultiplier: Double {
+        get { globalGlide.resolvedLeftMultiplier }
+        set {
+            let stepped = (newValue / Glide.leftMultiplierStep).rounded() * Glide.leftMultiplierStep
+            updateGlobal { $0.leftMultiplier = Decimal(string: String(format: "%.1f", stepped.clamped(to: Glide.leftMultiplierRange))) }
+        }
+    }
+
     /// Enables gliding for all mice the first time the app runs, with Mouse
     /// Glide's defaults (speed 2, no reverse). Later changes are left alone.
     func seedDefaultsIfNeeded() {

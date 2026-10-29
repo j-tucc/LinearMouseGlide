@@ -45,13 +45,37 @@ struct GlideSettings: View {
                                 .glideSwitch()
                         }
 
-                        GlideRow("Scroll Speed", subtitle: "Mouse scroll speed", showsDivider: false) {
+                        GlideRow("Scroll Speed", subtitle: "Mouse scroll speed") {
                             VStack(spacing: 2) {
                                 GlideSpeedSlider(speed: $glide.speed)
                                 HStack {
                                     Text("slow")
                                     Spacer()
                                     Text("quick")
+                                }
+                                .font(.system(size: 12))
+                            }
+                            .frame(width: 240)
+                        }
+
+                        GlideRow(
+                            "Side Wheel Left Boost",
+                            subtitle: "Extra speed when turning the side wheel left",
+                            showsDivider: false
+                        ) {
+                            VStack(spacing: 2) {
+                                GlideSpeedSlider(
+                                    speed: $glide.leftMultiplier,
+                                    range: Scheme.Scrolling.Glide.leftMultiplierRange,
+                                    step: Scheme.Scrolling.Glide.leftMultiplierStep
+                                )
+                                HStack {
+                                    Text(verbatim: "1×")
+                                    Spacer()
+                                    Text(verbatim: String(format: "%.1f×", glide.leftMultiplier))
+                                        .fontWeight(.medium)
+                                    Spacer()
+                                    Text(verbatim: "3×")
                                 }
                                 .font(.system(size: 12))
                             }

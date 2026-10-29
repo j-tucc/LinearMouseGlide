@@ -5,6 +5,7 @@
 //
 //   glide-parity record <out.json>        play scripted input, record what an app receives
 //   glide-parity compare <a.json> <b.json> diff two recordings scenario by scenario
+//   glide-parity sample [seconds]          summarize physical horizontal wheel input, left vs right
 //
 // `record` opens a window under the cursor, waits for one physical mouse
 // movement (so LinearMouse attributes the synthetic events to that mouse as
@@ -92,6 +93,7 @@ let scenarios: [Scenario] = [
     Scenario(name: "option-notch", steps: [.wheel(y: -1, x: 0, flags: .maskAlternate)]),
     Scenario(name: "command-notch", steps: [.wheel(y: -1, x: 0, flags: .maskCommand)]),
     Scenario(name: "tilt-horizontal", steps: [.wheel(y: 0, x: -1, flags: [])]),
+    Scenario(name: "tilt-right", steps: [.wheel(y: 0, x: 1, flags: [])]),
     Scenario(name: "pixel-continuous-no-phase", steps: repeated(3, every: 16, .pixel(y: -40, x: 0, phase: 0))),
     Scenario(
         name: "trackpad-phased",
@@ -303,7 +305,9 @@ final class Recorder: NSObject, NSApplicationDelegate {
         sleep(2)
 
         var results: [ScenarioRecording] = []
-        for scenario in scenarios {
+        // GLIDE_PARITY_ONLY=a,b records just those scenarios.
+        let only = ProcessInfo.processInfo.environment["GLIDE_PARITY_ONLY"].map { Set($0.split(separator: ",").map(String.init)) }
+        for scenario in scenarios where only?.contains(scenario.name) ?? true {
             centerCursor()
             lock.lock()
             current = []
@@ -377,7 +381,8 @@ final class Recorder: NSObject, NSApplicationDelegate {
 /// Scenarios where LinearMouse Glide deliberately behaves differently from
 /// LinearMouse + Mouse Glide. Differences there are reported, not failed.
 let intendedDifferences = [
-    "tilt-horizontal": "horizontal wheels glide sideways (Mouse Glide redirected them vertically)"
+    "tilt-horizontal": "horizontal wheels glide sideways (Mouse Glide redirected them vertically)",
+    "tilt-right": "horizontal wheels glide sideways (Mouse Glide redirected them vertically)"
 ]
 
 func compare(_ a: Recording, _ b: Recording) -> Bool {
@@ -392,7 +397,11 @@ func compare(_ a: Recording, _ b: Recording) -> Bool {
         return String(format: "%3d events  ΣY %8.2f  ΣX %8.2f  %5.0f ms", events.count, sumY, sumX, duration)
     }
 
-    for (sa, sb) in zip(a.scenarios, b.scenarios) {
+    let scenariosB = Dictionary(b.scenarios.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+    for sa in a.scenarios {
+        guard let sb = scenariosB[sa.name] else {
+            continue
+        }
         var problems: [String] = []
         if sa.contaminated || sb.contaminated {
             problems.append("physical input during recording — rerun")
@@ -472,6 +481,129 @@ func compare(_ a: Recording, _ b: Recording) -> Bool {
     return allPass
 }
 
+// MARK: - Sample
+
+/// Records physical wheel events at two points for `seconds`: raw from the
+/// device (HID tap, ahead of LinearMouse) and after LinearMouse's rules
+/// (annotated session tap, ahead of Glide), then prints a per-direction summary.
+final class Sampler {
+    struct Sample {
+        var stage: String
+        var time: Double
+        var line: Int64
+        var point: Double
+        var fixed: Double
+        var continuous: Int64
+        var verticalLine: Int64
+        var verticalPoint: Double
+        var shift: Bool
+    }
+
+    private let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+
+    private var samples: [Sample] = []
+    private var taps: [CFMachPort] = []
+
+    func run(seconds: Double) {
+        install(at: .cghidEventTap, place: .headInsertEventTap, stage: "raw")
+        install(at: .cgAnnotatedSessionEventTap, place: .headInsertEventTap, stage: "after LinearMouse")
+        print("Scroll the horizontal wheel LEFT, pause, then RIGHT, the same number of notches (\(Int(seconds)) s)…")
+        print("\u{7}", terminator: "")
+        NSSound.beep()
+        CFRunLoopRunInMode(.defaultMode, seconds, false)
+        NSSound.beep()
+        print("\(samples.filter { $0.stage == "raw" }.count) physical scroll events in total")
+        report()
+    }
+
+    private func install(at location: CGEventTapLocation, place: CGEventTapPlacement, stage: String) {
+        let box = Unmanaged.passRetained(StageBox(sampler: self, stage: stage)).toOpaque()
+        guard let tap = CGEvent.tapCreate(
+            tap: location,
+            place: place,
+            options: .listenOnly,
+            eventsOfInterest: CGEventMask(1 << CGEventType.scrollWheel.rawValue),
+            callback: { _, _, event, context in
+                let box = Unmanaged<StageBox>.fromOpaque(context!).takeUnretainedValue()
+                box.sampler.record(event, stage: box.stage)
+                return Unmanaged.passUnretained(event)
+            },
+            userInfo: box
+        ) else {
+            print("could not create \(stage) tap")
+            return
+        }
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), CFMachPortCreateRunLoopSource(nil, tap, 0), .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        taps.append(tap)
+    }
+
+    private final class StageBox {
+        let sampler: Sampler
+        let stage: String
+
+        init(sampler: Sampler, stage: String) {
+            self.sampler = sampler
+            self.stage = stage
+        }
+    }
+
+    fileprivate func record(_ event: CGEvent, stage: String) {
+        // Physical input only: synthetic events carry their poster's pid, and
+        // Glide frames (copies of physical events) carry LinearMouse's marker.
+        guard event.getIntegerValueField(.eventSourceUnixProcessID) == 0,
+              event.getIntegerValueField(.eventSourceUserData) != 0x534D_4F4F_5448 else {
+            return
+        }
+        let sample = Sample(
+            stage: stage,
+            time: Double(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - start) / 1_000_000_000,
+            line: event.getIntegerValueField(.scrollWheelEventDeltaAxis2),
+            point: event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2),
+            fixed: event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2),
+            continuous: event.getIntegerValueField(.scrollWheelEventIsContinuous),
+            verticalLine: event.getIntegerValueField(.scrollWheelEventDeltaAxis1),
+            verticalPoint: event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1),
+            shift: event.flags.contains(.maskShift)
+        )
+        samples.append(sample)
+        if stage == "raw" {
+            print(String(
+                format: "%6.2fs raw  vertical line %3lld pt %7.1f | horizontal line %3lld pt %7.1f | shift=%@ continuous=%lld",
+                sample.time, sample.verticalLine, sample.verticalPoint, sample.line, sample.point,
+                sample.shift ? "yes" : "no", sample.continuous
+            ))
+        }
+    }
+
+    private func report() {
+        if let first = samples.first(where: { $0.stage == "raw" && ($0.point != 0 || $0.line != 0) }) {
+            print(String(format: "first raw event (scrolled left first): point %.1f line %lld", first.point, first.line))
+        }
+        for stage in ["raw", "after LinearMouse"] {
+            for (name, isLeft) in [("left", true), ("right", false)] {
+                // Measured on a Keychron side wheel: scrolling left is negative.
+                let events = samples.filter {
+                    $0.stage == stage && ($0.point != 0 || $0.line != 0)
+                        && (($0.point != 0 ? $0.point : Double($0.line)) < 0) == isLeft
+                }
+                guard !events.isEmpty else {
+                    print(String(format: "%-18@ %-5@ no events", stage as NSString, name as NSString))
+                    continue
+                }
+                let points = events.map { abs($0.point) }
+                let lines = events.map { abs($0.line) }
+                print(String(
+                    format: "%-18@ %-5@ %3d events  Σline %4lld  Σpoint %7.1f  point/event min %.1f avg %.1f max %.1f  continuous=%@",
+                    stage as NSString, name as NSString, events.count, lines.reduce(0, +), points.reduce(0, +),
+                    points.min()!, points.reduce(0, +) / Double(points.count), points.max()!,
+                    Set(events.map(\.continuous)).map(String.init).joined(separator: ",") as NSString
+                ))
+            }
+        }
+    }
+}
+
 // MARK: - Main
 
 let arguments = CommandLine.arguments
@@ -482,12 +614,14 @@ case "record" where arguments.count == 3:
     let recorder = Recorder(outputURL: URL(fileURLWithPath: arguments[2]))
     app.delegate = recorder
     app.run()
+case "sample":
+    Sampler().run(seconds: arguments.count > 2 ? Double(arguments[2]) ?? 20 : 20)
 case "compare" where arguments.count == 4:
     let decoder = JSONDecoder()
     let a = try! decoder.decode(Recording.self, from: Data(contentsOf: URL(fileURLWithPath: arguments[2])))
     let b = try! decoder.decode(Recording.self, from: Data(contentsOf: URL(fileURLWithPath: arguments[3])))
     exit(compare(a, b) ? 0 : 1)
 default:
-    print("usage: glide-parity record <out.json> | compare <a.json> <b.json>")
+    print("usage: glide-parity record <out.json> | compare <a.json> <b.json> | sample [seconds]")
     exit(2)
 }

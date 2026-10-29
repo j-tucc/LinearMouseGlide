@@ -123,7 +123,12 @@ final class GlideEventTap {
               engine.isEnabled,
               let glide = glide(for: event),
               glide.isEnabled,
-              engine.feed(event, speed: glide.resolvedSpeed, reverse: glide.isReversed) else {
+              engine.feed(
+                  event,
+                  speed: glide.resolvedSpeed,
+                  reverse: glide.isReversed,
+                  leftMultiplier: glide.resolvedLeftMultiplier
+              ) else {
             return Unmanaged.passUnretained(event)
         }
         return nil

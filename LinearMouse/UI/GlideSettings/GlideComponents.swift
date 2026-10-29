@@ -76,13 +76,14 @@ struct GlideRow<Accessory: View>: View {
     }
 }
 
-/// An `NSSlider` with one tick mark per speed step, like Mouse Glide's
-/// 1.0...5.0 slider, which SwiftUI's `Slider` cannot show on older systems.
+/// An `NSSlider` with one tick mark per step, like Mouse Glide's 1.0...5.0
+/// speed slider, which SwiftUI's `Slider` cannot show on older systems.
 struct GlideSpeedSlider: NSViewRepresentable {
     @Binding var speed: Double
+    var range = Scheme.Scrolling.Glide.speedRange
+    var step = Scheme.Scrolling.Glide.speedStep
 
     func makeNSView(context: Context) -> NSSlider {
-        let range = Scheme.Scrolling.Glide.speedRange
         let slider = NSSlider(
             value: speed,
             minValue: range.lowerBound,
@@ -90,7 +91,7 @@ struct GlideSpeedSlider: NSViewRepresentable {
             target: context.coordinator,
             action: #selector(Coordinator.valueChanged(_:))
         )
-        slider.numberOfTickMarks = Int((range.upperBound - range.lowerBound) / Scheme.Scrolling.Glide.speedStep) + 1
+        slider.numberOfTickMarks = Int(((range.upperBound - range.lowerBound) / step).rounded()) + 1
         slider.allowsTickMarkValuesOnly = true
         slider.tickMarkPosition = .below
         slider.isContinuous = true

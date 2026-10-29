@@ -242,6 +242,14 @@ declare namespace Scheme {
        * @default false
        */
       reverse?: boolean;
+
+      /**
+       * @description Extra multiplier for leftward side/tilt wheel input, for side wheels that are harder to turn one way.
+       * @minimum 1
+       * @maximum 3
+       * @default 1
+       */
+      leftMultiplier?: number;
     };
 
     type Bidirectional<T> =

@@ -1718,6 +1718,13 @@
           "description": "Set to `false` to let this scheme's events pass through without gliding.",
           "type": "boolean"
         },
+        "leftMultiplier": {
+          "default": 1,
+          "description": "Extra multiplier for leftward side/tilt wheel input, for side wheels that are harder to turn one way.",
+          "maximum": 3,
+          "minimum": 1,
+          "type": "number"
+        },
         "reverse": {
           "default": false,
           "description": "Reverse the glide direction, on top of `reverse`.",
